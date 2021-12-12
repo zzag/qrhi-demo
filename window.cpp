@@ -1,6 +1,7 @@
 #include "window.h"
 
 #include <QtGui/private/qrhivulkan_p.h>
+#include <QFile>
 #include <QPlatformSurfaceEvent>
 
 Window::Window(QVulkanInstance *vulkanInstance)
@@ -34,6 +35,11 @@ void Window::releaseResources()
         m_renderPass->destroy();
         m_renderPass = nullptr;
     }
+
+    for (QRhiResource *resource : qAsConst(m_releasePool)) {
+        resource->destroy();
+    }
+    m_releasePool.clear();
 
     delete m_rhi;
     m_rhi = nullptr;
@@ -90,6 +96,15 @@ void Window::ensurePaused()
     }
 }
 
+static QShader loadShader(const QString &fileName)
+{
+    QFile file(fileName);
+    if (file.open(QIODevice::ReadOnly)) {
+        return QShader::fromSerialized(file.readAll());
+    }
+    return QShader{};
+}
+
 void Window::initialize()
 {
     m_swapChain = m_rhi->newSwapChain();
@@ -97,6 +112,76 @@ void Window::initialize()
 
     m_renderPass = m_swapChain->newCompatibleRenderPassDescriptor();
     m_swapChain->setRenderPassDescriptor(m_renderPass);
+
+    QImage textureData(QStringLiteral(":/pexels-petr-ganaj-4032582.jpg"));
+
+    const QVector<float> vertexData {
+        // First triangle
+        -1.0f, -1.0f, 0.0f, 0.0f,
+        1.0f, 1.0f, 1.0f, 1.0f,
+        -1.0f, 1.0f, 0.0f, 1.0f,
+
+        // Second triangle
+        -1.0f, -1.0f, 0.0f, 0.0f,
+        1.0f, -1.0f, 1.0f, 0.0f,
+        1.0f, 1.0f, 1.0f, 1.0f,
+    };
+
+    m_vbo = m_rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::UsageFlag::VertexBuffer, sizeof(float) * vertexData.size());
+    m_releasePool << m_vbo;
+    m_vbo->create();
+
+    m_texture = m_rhi->newTexture(QRhiTexture::BGRA8, textureData.size());
+    m_releasePool << m_texture;
+    m_texture->create();
+
+    m_sampler = m_rhi->newSampler(QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None, QRhiSampler::AddressMode::ClampToEdge, QRhiSampler::AddressMode::ClampToEdge);
+    m_releasePool << m_sampler;
+    m_sampler->create();
+
+    m_shaderBindings = m_rhi->newShaderResourceBindings();
+    m_releasePool << m_shaderBindings;
+    m_shaderBindings->setBindings({
+        QRhiShaderResourceBinding::sampledTexture(0, QRhiShaderResourceBinding::FragmentStage, m_texture, m_sampler)
+    });
+    m_shaderBindings->create();
+
+    m_pipeline = m_rhi->newGraphicsPipeline();
+    m_releasePool << m_pipeline;
+
+    const QShader vertexShader = loadShader(QStringLiteral(":/shaders/texture.vert.qsb"));
+    if (!vertexShader.isValid()) {
+        qFatal("Failed to load vertex shader");
+    }
+
+    const QShader fragmentShader = loadShader(QStringLiteral(":/shaders/texture.frag.qsb"));
+    if (!fragmentShader.isValid()) {
+        qFatal("Failed to load fragment shader");
+    }
+
+    m_pipeline->setShaderStages({
+        QRhiShaderStage(QRhiShaderStage::Vertex, vertexShader),
+        QRhiShaderStage(QRhiShaderStage::Fragment, fragmentShader),
+    });
+
+    QRhiVertexInputLayout vertexInputLayout;
+    vertexInputLayout.setBindings({
+        QRhiVertexInputBinding(4 * sizeof(float)),
+    });
+    vertexInputLayout.setAttributes({
+        QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float2, 0 * sizeof(float)),
+        QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)),
+    });
+
+    m_pipeline->setVertexInputLayout(vertexInputLayout);
+    m_pipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+    m_pipeline->setShaderResourceBindings(m_shaderBindings);
+    m_pipeline->setRenderPassDescriptor(m_renderPass);
+    m_pipeline->create();
+
+    m_initialUpdates = m_rhi->nextResourceUpdateBatch();
+    m_initialUpdates->uploadStaticBuffer(m_vbo, 0, sizeof(float) * vertexData.size(), vertexData.constData());
+    m_initialUpdates->uploadTexture(m_texture, textureData);
 }
 
 void Window::render()
@@ -125,9 +210,24 @@ void Window::render()
         break;
     }
 
+    QRhiResourceUpdateBatch *updates = m_rhi->nextResourceUpdateBatch();
+    if (m_initialUpdates) {
+        updates->merge(m_initialUpdates);
+        m_initialUpdates->release();
+        m_initialUpdates = nullptr;
+    }
+
     QRhiCommandBuffer *cmd = m_swapChain->currentFrameCommandBuffer();
 
-    cmd->beginPass(m_swapChain->currentFrameRenderTarget(), Qt::cyan, QRhiDepthStencilClearValue{});
+    cmd->beginPass(m_swapChain->currentFrameRenderTarget(), Qt::cyan, QRhiDepthStencilClearValue{}, updates);
+    cmd->setGraphicsPipeline(m_pipeline);
+    cmd->setViewport(QRhiViewport(0, 0, m_swapChain->currentPixelSize().width(), m_swapChain->currentPixelSize().height()));
+    cmd->setShaderResources();
+    const QRhiCommandBuffer::VertexInput vertexBindings[] = {
+        QRhiCommandBuffer::VertexInput{m_vbo, 0},
+    };
+    cmd->setVertexInput(0, 1, vertexBindings);
+    cmd->draw(6);
     cmd->endPass();
 
     result = m_rhi->endFrame(m_swapChain);

@@ -40,5 +40,13 @@ private:
     QRhiSwapChain *m_swapChain = nullptr;
     bool m_hasSwapChain = false;
     QRhiRenderPassDescriptor *m_renderPass = nullptr;
+
+    QList<QRhiResource *> m_releasePool;
+    QRhiResourceUpdateBatch *m_initialUpdates = nullptr;
+    QRhiBuffer *m_vbo = nullptr;
+    QRhiTexture *m_texture = nullptr;
+    QRhiSampler *m_sampler = nullptr;
+    QRhiShaderResourceBindings *m_shaderBindings = nullptr;
+    QRhiGraphicsPipeline *m_pipeline = nullptr;
 };
 
