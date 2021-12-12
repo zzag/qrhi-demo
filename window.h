@@ -44,9 +44,11 @@ private:
     QList<QRhiResource *> m_releasePool;
     QRhiResourceUpdateBatch *m_initialUpdates = nullptr;
     QRhiBuffer *m_vbo = nullptr;
+    QRhiBuffer *m_ubo = nullptr;
     QRhiTexture *m_texture = nullptr;
     QRhiSampler *m_sampler = nullptr;
     QRhiShaderResourceBindings *m_shaderBindings = nullptr;
     QRhiGraphicsPipeline *m_pipeline = nullptr;
+    int m_frameCount = 0;
 };
 

@@ -131,6 +131,10 @@ void Window::initialize()
     m_releasePool << m_vbo;
     m_vbo->create();
 
+    m_ubo = m_rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UsageFlag::VertexBuffer | QRhiBuffer::UsageFlag::UniformBuffer, sizeof(QMatrix4x4));
+    m_releasePool << m_ubo;
+    m_ubo->create();
+
     m_texture = m_rhi->newTexture(QRhiTexture::BGRA8, textureData.size());
     m_releasePool << m_texture;
     m_texture->create();
@@ -142,7 +146,8 @@ void Window::initialize()
     m_shaderBindings = m_rhi->newShaderResourceBindings();
     m_releasePool << m_shaderBindings;
     m_shaderBindings->setBindings({
-        QRhiShaderResourceBinding::sampledTexture(0, QRhiShaderResourceBinding::FragmentStage, m_texture, m_sampler)
+        QRhiShaderResourceBinding::sampledTexture(0, QRhiShaderResourceBinding::FragmentStage, m_texture, m_sampler),
+        QRhiShaderResourceBinding::uniformBuffer(1, QRhiShaderResourceBinding::VertexStage, m_ubo),
     });
     m_shaderBindings->create();
 
@@ -217,6 +222,10 @@ void Window::render()
         m_initialUpdates = nullptr;
     }
 
+    QMatrix4x4 modelViewProjectionMatrix;
+    modelViewProjectionMatrix.rotate(m_frameCount, 0, 0, 1);
+    updates->updateDynamicBuffer(m_ubo, 0, sizeof(modelViewProjectionMatrix), modelViewProjectionMatrix.constData());
+
     QRhiCommandBuffer *cmd = m_swapChain->currentFrameCommandBuffer();
 
     cmd->beginPass(m_swapChain->currentFrameRenderTarget(), Qt::cyan, QRhiDepthStencilClearValue{}, updates);
@@ -234,6 +243,9 @@ void Window::render()
     if (result != QRhi::FrameOpSuccess) {
         qDebug() << "Failed to end a frame";
     }
+
+    m_frameCount++;
+    requestUpdate();
 }
 
 bool Window::resizeSwapChain()
