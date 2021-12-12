@@ -22,6 +22,8 @@ qt_add_shaders(rhi-hello-world "shaders"
     PREFIX
         "/shaders"
     FILES
+        offscreen.frag
+        offscreen.vert
         texture.frag
         texture.vert
 )

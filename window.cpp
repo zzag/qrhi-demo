@@ -31,11 +31,6 @@ void Window::releaseResources()
 {
     releaseSwapChain();
 
-    if (m_renderPass) {
-        m_renderPass->destroy();
-        m_renderPass = nullptr;
-    }
-
     for (QRhiResource *resource : qAsConst(m_releasePool)) {
         resource->destroy();
     }
@@ -111,10 +106,10 @@ void Window::initialize()
     m_swapChain->setWindow(this);
 
     m_renderPass = m_swapChain->newCompatibleRenderPassDescriptor();
+    m_releasePool << m_renderPass;
     m_swapChain->setRenderPassDescriptor(m_renderPass);
 
     QImage textureData(QStringLiteral(":/pexels-petr-ganaj-4032582.jpg"));
-
     const QVector<float> vertexData {
         // First triangle
         -1.0f, -1.0f, 0.0f, 0.0f,
@@ -127,66 +122,148 @@ void Window::initialize()
         1.0f, 1.0f, 1.0f, 1.0f,
     };
 
-    m_vbo = m_rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::UsageFlag::VertexBuffer, sizeof(float) * vertexData.size());
-    m_releasePool << m_vbo;
-    m_vbo->create();
+    const QVector<float> onscreenVertexData {
+        // First triangle
+        0, 0, 0.0f, 0.0f,
+        300, 200, 1.0f, 1.0f,
+        0, 200, 0.0f, 1.0f,
 
-    m_ubo = m_rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UsageFlag::VertexBuffer | QRhiBuffer::UsageFlag::UniformBuffer, sizeof(QMatrix4x4));
-    m_releasePool << m_ubo;
-    m_ubo->create();
+        // Second triangle
+        0, 0, 0.0f, 0.0f,
+        300, 0, 1.0f, 0.0f,
+        300, 200, 1.0f, 1.0f,
+    };
 
-    m_texture = m_rhi->newTexture(QRhiTexture::BGRA8, textureData.size());
-    m_releasePool << m_texture;
-    m_texture->create();
+    {
+        m_offscreen.targetTexture = m_rhi->newTexture(QRhiTexture::RGBA8, m_swapChain->surfacePixelSize(), 1, QRhiTexture::RenderTarget);
+        m_releasePool << m_offscreen.targetTexture;
+        m_offscreen.targetTexture->create();
 
-    m_sampler = m_rhi->newSampler(QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None, QRhiSampler::AddressMode::ClampToEdge, QRhiSampler::AddressMode::ClampToEdge);
-    m_releasePool << m_sampler;
-    m_sampler->create();
+        m_offscreen.renderTarget = m_rhi->newTextureRenderTarget(QRhiColorAttachment(m_offscreen.targetTexture));
+        m_releasePool << m_offscreen.renderTarget;
 
-    m_shaderBindings = m_rhi->newShaderResourceBindings();
-    m_releasePool << m_shaderBindings;
-    m_shaderBindings->setBindings({
-        QRhiShaderResourceBinding::sampledTexture(0, QRhiShaderResourceBinding::FragmentStage, m_texture, m_sampler),
-        QRhiShaderResourceBinding::uniformBuffer(1, QRhiShaderResourceBinding::VertexStage, m_ubo),
-    });
-    m_shaderBindings->create();
+        m_offscreen.renderPass = m_offscreen.renderTarget->newCompatibleRenderPassDescriptor();
+        m_releasePool << m_offscreen.renderPass;
+        m_offscreen.renderTarget->setRenderPassDescriptor(m_offscreen.renderPass);
+        m_offscreen.renderTarget->create();
 
-    m_pipeline = m_rhi->newGraphicsPipeline();
-    m_releasePool << m_pipeline;
+        m_offscreen.vbo = m_rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::UsageFlag::VertexBuffer, sizeof(float) * vertexData.size());
+        m_releasePool << m_offscreen.vbo;
+        m_offscreen.vbo->create();
 
-    const QShader vertexShader = loadShader(QStringLiteral(":/shaders/texture.vert.qsb"));
-    if (!vertexShader.isValid()) {
-        qFatal("Failed to load vertex shader");
+        m_offscreen.ubo = m_rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UsageFlag::VertexBuffer | QRhiBuffer::UsageFlag::UniformBuffer, sizeof(QMatrix4x4));
+        m_releasePool << m_offscreen.ubo;
+        m_offscreen.ubo->create();
+
+        m_offscreen.texture = m_rhi->newTexture(QRhiTexture::BGRA8, textureData.size());
+        m_releasePool << m_offscreen.texture;
+        m_offscreen.texture->create();
+
+        m_offscreen.sampler = m_rhi->newSampler(QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None, QRhiSampler::AddressMode::ClampToEdge, QRhiSampler::AddressMode::ClampToEdge);
+        m_releasePool << m_offscreen.sampler;
+        m_offscreen.sampler->create();
+
+        m_offscreen.shaderBindings = m_rhi->newShaderResourceBindings();
+        m_releasePool << m_offscreen.shaderBindings;
+        m_offscreen.shaderBindings->setBindings({
+            QRhiShaderResourceBinding::sampledTexture(0, QRhiShaderResourceBinding::FragmentStage, m_offscreen.texture, m_offscreen.sampler),
+            QRhiShaderResourceBinding::uniformBuffer(1, QRhiShaderResourceBinding::VertexStage, m_offscreen.ubo),
+        });
+        m_offscreen.shaderBindings->create();
+
+        m_offscreen.pipeline = m_rhi->newGraphicsPipeline();
+        m_releasePool << m_offscreen.pipeline;
+
+        const QShader vertexShader = loadShader(QStringLiteral(":/shaders/offscreen.vert.qsb"));
+        if (!vertexShader.isValid()) {
+            qFatal("Failed to load vertex shader");
+        }
+
+        const QShader fragmentShader = loadShader(QStringLiteral(":/shaders/offscreen.frag.qsb"));
+        if (!fragmentShader.isValid()) {
+            qFatal("Failed to load fragment shader");
+        }
+
+        m_offscreen.pipeline->setShaderStages({
+            QRhiShaderStage(QRhiShaderStage::Vertex, vertexShader),
+            QRhiShaderStage(QRhiShaderStage::Fragment, fragmentShader),
+        });
+
+        QRhiVertexInputLayout vertexInputLayout;
+        vertexInputLayout.setBindings({
+            QRhiVertexInputBinding(4 * sizeof(float)),
+        });
+        vertexInputLayout.setAttributes({
+            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float2, 0 * sizeof(float)),
+            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)),
+        });
+
+        m_offscreen.pipeline->setVertexInputLayout(vertexInputLayout);
+        m_offscreen.pipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        m_offscreen.pipeline->setShaderResourceBindings(m_offscreen.shaderBindings);
+        m_offscreen.pipeline->setRenderPassDescriptor(m_offscreen.renderPass);
+        m_offscreen.pipeline->create();
     }
 
-    const QShader fragmentShader = loadShader(QStringLiteral(":/shaders/texture.frag.qsb"));
-    if (!fragmentShader.isValid()) {
-        qFatal("Failed to load fragment shader");
+    {
+        m_onscreen.vbo = m_rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::VertexBuffer, sizeof(float) * onscreenVertexData.size());
+        m_releasePool << m_onscreen.vbo;
+        m_onscreen.vbo->create();
+
+        m_onscreen.ubo = m_rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer | QRhiBuffer::UniformBuffer, sizeof(QMatrix4x4));
+        m_releasePool << m_onscreen.ubo;
+        m_onscreen.ubo->create();
+
+        m_onscreen.sampler = m_rhi->newSampler(QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None, QRhiSampler::AddressMode::ClampToEdge, QRhiSampler::AddressMode::ClampToEdge);
+        m_releasePool << m_onscreen.sampler;
+        m_onscreen.sampler->create();
+
+        m_onscreen.shaderBindings = m_rhi->newShaderResourceBindings();
+        m_releasePool << m_onscreen.shaderBindings;
+        m_onscreen.shaderBindings->setBindings({
+            QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::VertexStage, m_onscreen.ubo),
+            QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_offscreen.targetTexture, m_onscreen.sampler),
+        });
+        m_onscreen.shaderBindings->create();
+
+        m_onscreen.pipeline = m_rhi->newGraphicsPipeline();
+        m_releasePool << m_onscreen.pipeline;
+
+        const QShader vertexShader = loadShader(QStringLiteral(":/shaders/texture.vert.qsb"));
+        if (!vertexShader.isValid()) {
+            qFatal("Failed to load vertex shader");
+        }
+
+        const QShader fragmentShader = loadShader(QStringLiteral(":/shaders/texture.frag.qsb"));
+        if (!fragmentShader.isValid()) {
+            qFatal("Failed to load fragment shader");
+        }
+
+        m_onscreen.pipeline->setShaderStages({
+            QRhiShaderStage(QRhiShaderStage::Vertex, vertexShader),
+            QRhiShaderStage(QRhiShaderStage::Fragment, fragmentShader),
+        });
+
+        QRhiVertexInputLayout vertexInputLayout;
+        vertexInputLayout.setBindings({
+            QRhiVertexInputBinding(4 * sizeof(float)),
+        });
+        vertexInputLayout.setAttributes({
+            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float2, 0 * sizeof(float)),
+            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)),
+        });
+
+        m_onscreen.pipeline->setVertexInputLayout(vertexInputLayout);
+        m_onscreen.pipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        m_onscreen.pipeline->setShaderResourceBindings(m_onscreen.shaderBindings);
+        m_onscreen.pipeline->setRenderPassDescriptor(m_renderPass);
+        m_onscreen.pipeline->create();
     }
-
-    m_pipeline->setShaderStages({
-        QRhiShaderStage(QRhiShaderStage::Vertex, vertexShader),
-        QRhiShaderStage(QRhiShaderStage::Fragment, fragmentShader),
-    });
-
-    QRhiVertexInputLayout vertexInputLayout;
-    vertexInputLayout.setBindings({
-        QRhiVertexInputBinding(4 * sizeof(float)),
-    });
-    vertexInputLayout.setAttributes({
-        QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float2, 0 * sizeof(float)),
-        QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)),
-    });
-
-    m_pipeline->setVertexInputLayout(vertexInputLayout);
-    m_pipeline->setTopology(QRhiGraphicsPipeline::Triangles);
-    m_pipeline->setShaderResourceBindings(m_shaderBindings);
-    m_pipeline->setRenderPassDescriptor(m_renderPass);
-    m_pipeline->create();
 
     m_initialUpdates = m_rhi->nextResourceUpdateBatch();
-    m_initialUpdates->uploadStaticBuffer(m_vbo, 0, sizeof(float) * vertexData.size(), vertexData.constData());
-    m_initialUpdates->uploadTexture(m_texture, textureData);
+    m_initialUpdates->uploadStaticBuffer(m_offscreen.vbo, 0, sizeof(float) * vertexData.size(), vertexData.constData());
+    m_initialUpdates->uploadStaticBuffer(m_onscreen.vbo, 0, sizeof(float) * onscreenVertexData.size(), onscreenVertexData.constData());
+    m_initialUpdates->uploadTexture(m_offscreen.texture, textureData);
 }
 
 void Window::render()
@@ -222,22 +299,41 @@ void Window::render()
         m_initialUpdates = nullptr;
     }
 
-    QMatrix4x4 modelViewProjectionMatrix;
-    modelViewProjectionMatrix.rotate(m_frameCount, 0, 0, 1);
-    updates->updateDynamicBuffer(m_ubo, 0, sizeof(modelViewProjectionMatrix), modelViewProjectionMatrix.constData());
-
     QRhiCommandBuffer *cmd = m_swapChain->currentFrameCommandBuffer();
 
-    cmd->beginPass(m_swapChain->currentFrameRenderTarget(), Qt::cyan, QRhiDepthStencilClearValue{}, updates);
-    cmd->setGraphicsPipeline(m_pipeline);
-    cmd->setViewport(QRhiViewport(0, 0, m_swapChain->currentPixelSize().width(), m_swapChain->currentPixelSize().height()));
-    cmd->setShaderResources();
-    const QRhiCommandBuffer::VertexInput vertexBindings[] = {
-        QRhiCommandBuffer::VertexInput{m_vbo, 0},
-    };
-    cmd->setVertexInput(0, 1, vertexBindings);
-    cmd->draw(6);
-    cmd->endPass();
+    {
+        QMatrix4x4 modelViewProjectionMatrix;
+        modelViewProjectionMatrix.rotate(m_frameCount, 0, 0, 1);
+        updates->updateDynamicBuffer(m_offscreen.ubo, 0, sizeof(modelViewProjectionMatrix), modelViewProjectionMatrix.constData());
+
+        cmd->beginPass(m_offscreen.renderTarget, Qt::cyan, QRhiDepthStencilClearValue{}, updates);
+        cmd->setGraphicsPipeline(m_offscreen.pipeline);
+        cmd->setViewport(QRhiViewport(0, 0, m_offscreen.targetTexture->pixelSize().width(), m_offscreen.targetTexture->pixelSize().height()));
+        cmd->setShaderResources();
+        const QRhiCommandBuffer::VertexInput vertexBindings[] = {
+            QRhiCommandBuffer::VertexInput{m_offscreen.vbo, 0},
+        };
+        cmd->setVertexInput(0, 1, vertexBindings);
+        cmd->draw(6);
+        cmd->endPass();
+    }
+
+    {
+        QMatrix4x4 modelViewProjectionMatrix;
+        modelViewProjectionMatrix.ortho(0, width(), 0, height(), -1, 1);
+        updates->updateDynamicBuffer(m_onscreen.ubo, 0, sizeof(modelViewProjectionMatrix), modelViewProjectionMatrix.constData());
+
+        cmd->beginPass(m_swapChain->currentFrameRenderTarget(), Qt::black, QRhiDepthStencilClearValue{}, updates);
+        cmd->setGraphicsPipeline(m_onscreen.pipeline);
+        cmd->setViewport(QRhiViewport(0, 0, m_swapChain->currentPixelSize().width(), m_swapChain->currentPixelSize().height()));
+        cmd->setShaderResources();
+        const QRhiCommandBuffer::VertexInput vertexBindings[] = {
+            QRhiCommandBuffer::VertexInput{m_onscreen.vbo, 0},
+        };
+        cmd->setVertexInput(0, 1, vertexBindings);
+        cmd->draw(6);
+        cmd->endPass();
+    }
 
     result = m_rhi->endFrame(m_swapChain);
     if (result != QRhi::FrameOpSuccess) {

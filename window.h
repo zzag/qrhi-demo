@@ -43,12 +43,24 @@ private:
 
     QList<QRhiResource *> m_releasePool;
     QRhiResourceUpdateBatch *m_initialUpdates = nullptr;
-    QRhiBuffer *m_vbo = nullptr;
-    QRhiBuffer *m_ubo = nullptr;
-    QRhiTexture *m_texture = nullptr;
-    QRhiSampler *m_sampler = nullptr;
-    QRhiShaderResourceBindings *m_shaderBindings = nullptr;
-    QRhiGraphicsPipeline *m_pipeline = nullptr;
+    struct {
+        QRhiTexture *targetTexture = nullptr;
+        QRhiTextureRenderTarget *renderTarget = nullptr;
+        QRhiRenderPassDescriptor *renderPass = nullptr;
+        QRhiBuffer *vbo = nullptr;
+        QRhiBuffer *ubo = nullptr;
+        QRhiTexture *texture = nullptr;
+        QRhiSampler *sampler = nullptr;
+        QRhiShaderResourceBindings *shaderBindings = nullptr;
+        QRhiGraphicsPipeline *pipeline = nullptr;
+    } m_offscreen;
+    struct {
+        QRhiBuffer *vbo = nullptr;
+        QRhiBuffer *ubo = nullptr;
+        QRhiSampler *sampler = nullptr;
+        QRhiShaderResourceBindings *shaderBindings = nullptr;
+        QRhiGraphicsPipeline *pipeline = nullptr;
+    } m_onscreen;
     int m_frameCount = 0;
 };
 
